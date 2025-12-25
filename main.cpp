@@ -102,7 +102,6 @@ public:
 };
 
 vector<Airline> airlines_vec;
-Aircraft *aircraft_assign_ptr;
 
 ////////////////////////////
 //                        //
@@ -114,13 +113,13 @@ class Flight
 {
 public:
     int id,
-        priority;
+        priority; // Lower number --> Lower priority
     string direction,
         status,
         phase;
     float speed;
     bool AVN_status;
-    Aircraft *aircrafts;
+    Aircraft *aircraft;
 
     Flight(string d, string st = "", string ph = "", float s = 0, int pr = 0, bool avns = 0)
     {
@@ -136,11 +135,8 @@ public:
         }
         phase = ph;
         speed = s;
-        priority = pr;
+        priority = pr;  // Actual priority is assigned later according to aircraft
         AVN_status = avns;
-
-        this->aircrafts = aircraft_assign_ptr++;
-        this->aircrafts->speed = speed;
     }
 };
 
@@ -706,7 +702,7 @@ void display_airlines(vector<Airline> vec)
 
 void display_flights(vector<Flight *> vec)
 {
-    int space[] = {12, 12, 12, 16, 12};
+    int space[] = {12, 12, 12, 16, 12, 12, 15};
     string str;
 
     coutMut.lock();
@@ -726,7 +722,14 @@ void display_flights(vector<Flight *> vec)
     str = "Speed";
     cout << str;
     spaces(str, space[4]);
-    cout << "AVN Status\n\033[0m";
+    str = "AVN Status";
+    cout << str;
+    spaces(str, space[5]);
+    str = "Type";
+    cout << str;
+    spaces(str, space[6]);
+    cout << "Priority\n\033[0m";
+
     coutMut.unlock();
 
     for (int i = 0; i < vec.size(); ++i)
@@ -742,7 +745,11 @@ void display_flights(vector<Flight *> vec)
         spaces(vec[i]->phase, space[3]);
         cout << to_string(vec[i]->speed);
         spaces(to_string(vec[i]->speed), space[4], 9);
-        cout << vec[i]->AVN_status << endl;
+        cout << vec[i]->AVN_status;
+        spaces(to_string(vec[i]->AVN_status), space[5]);
+        cout << vec[i]->aircraft->type;
+        spaces(vec[i]->aircraft->type, space[6]);
+        cout << vec[i]->priority << endl;
         coutMut.unlock();
     }
     coutMut.lock();
@@ -750,17 +757,39 @@ void display_flights(vector<Flight *> vec)
     coutMut.unlock();
 }
 
+void initialize_flights(string filename)
+{
+    parse_flights_CSV(flights_arr, airlines_arr, filename);
+
+    int ind = 0;
+    for (int i = 0; i < airlines_arr.size(); ++i)
+    {
+        for (int j = 0; j < airlines_vec[i].aircrafts.size(); ++j, ++ind)
+        {
+            flights_arr[ind]->aircraft = &airlines_arr[i].aircrafts[j];
+            if (flights_arr[ind]->aircraft->type == aircraft_types[0])
+                flights_arr[ind]->priority = 1;
+            else if (flights_arr[ind]->aircraft->type == aircraft_types[1])
+                flights_arr[ind]->priority = 2;
+            else
+                flights_arr[ind]->priority = 3;
+            flights_arr[ind]->aircraft->speed = flights_arr[ind]->speed;
+        }
+    }
+}
+
 int main()
 {
     //////////////////// Input ////////////////////
     string filename = "airlines_data.csv";
     parse_airlines_CSV(airlines_vec, filename);
-    aircraft_assign_ptr = &(airlines_vec[0].aircrafts[0]);
+
     filename = "flights_data.csv";
-    parse_flights_CSV(flights_arr, airlines_arr, filename);
+    initialize_flights(filename);
 
     // Display data
-    display_airlines(airlines_arr);display_flights(flights_arr);
+    display_airlines(airlines_arr);
+    display_flights(flights_arr);
 
     // Starts the Simulation, initializes variables
     StartSimulation();
@@ -770,7 +799,7 @@ int main()
         continue;
     }
 
-    sleep(26);  // To let any remaining flight finish
+    sleep(26); // To let any remaining flight finish
 
     simRunning = false;
     coutMut.lock();

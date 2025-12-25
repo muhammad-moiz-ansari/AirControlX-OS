@@ -2,11 +2,11 @@
     Name 1: Muhammad Moiz Ansari
     Roll# 1: 23i-0523
     Name 2: Faizan-ur-Rehman Khan
-    Roll #2: 23i-3021
-    
+    Roll# 2: 23i-3021
+
     Section: BS(CS)-F
     Instructor: Ms. Rabail Zahid
-    OS Project - Module 1
+    OS Project - Module 2
 */
 
 #include <iostream>
@@ -25,10 +25,11 @@ string airline_types[] = {"Commercial", "Military", "Medical", "Cargo"},
        aircraft_types[] = {"Commercial", "Cargo", "Emergency"},
        flight_status[] = {"Arrival", "Departure", "Emergency"},
        arrival_phases[] = {"Holding Phase", "Approach Phase", "Landing Phase", "Taxi Phase", "At Gate"},
-       departure_phases[] = {"At Gate", "Taxi Phase", "Takeoff Roll", "Climb"};
+       departure_phases[] = {"At Gate", "Taxi Phase", "Takeoff Roll", "Climb", "Departure"};
 
 int flight_id_assign = 1; // Variable for assigning flight ids
 int no_of_airlines = 6;
+mutex coutMut;
 
 void spaces(string str, int s, int limit = 99)
 {
@@ -138,9 +139,8 @@ public:
         priority = pr;
         AVN_status = avns;
 
-        this->aircrafts = aircraft_assign_ptr;
-        aircraft_assign_ptr += sizeof(Aircraft);
-        aircraft_assign_ptr->speed = speed;
+        this->aircrafts = aircraft_assign_ptr++;
+        this->aircrafts->speed = speed;
     }
 };
 
@@ -165,24 +165,39 @@ public:
 
     bool useRunway()
     {
-        rMutex.lock();
-
+        // If the runway is not occupied
         if (isOccupied == false)
         {
             isOccupied = true;
-            rMutex.unlock();
             return true;
         }
-
-        rMutex.unlock();
         return false;
     }
 
     void freeRunway()
     {
-        rMutex.lock();
         isOccupied = false;
-        rMutex.unlock();
+    }
+};
+
+// In order to send Flight Data as well as Runway Data
+// To the Track Flight Function
+class FlightWrapper
+{
+public:
+    Runway *toLandOn;
+    Flight *toLand;
+
+    FlightWrapper()
+    {
+        toLandOn = NULL;
+        toLand = NULL;
+    }
+
+    FlightWrapper(Flight *f, Runway *r)
+    {
+        toLand = f;
+        toLandOn = r;
     }
 };
 
@@ -192,7 +207,9 @@ public:
 //                                           //
 ///////////////////////////////////////////////
 
-vector<Runway *> runways; // Handles Runways
+vector<Runway *> runways;                     // Handles Runways
+vector<Airline> &airlines_arr = airlines_vec; // To be accessed in debugger
+vector<Flight *> flights_arr;
 
 vector<Flight *> arrQ; // Arrival Queue
 vector<Flight *> depQ; // Departure Queue
@@ -201,6 +218,19 @@ mutex depMutex;        // Mutex for DepQ
 
 vector<pthread_t> pIds;
 bool simRunning; // Global Boolean to Show if Simulation is running
+
+void deleteFlightFromFlightArr(Flight *f)
+{
+    int index = 0;
+    for (auto x : flights_arr)
+    {
+        if (x == f)
+            break;
+        index++;
+    }
+
+    flights_arr.erase(flights_arr.begin() + index);
+}
 
 void *dispatchArrivalFlights(void *arg)
 {
@@ -212,22 +242,66 @@ void *dispatchArrivalFlights(void *arg)
         auto northDuration = chrono::duration_cast<chrono::seconds>(now - northTime);
         auto southDuration = chrono::duration_cast<chrono::seconds>(now - southTime);
 
-        if (northDuration.count() >= 180)
+        if (northDuration.count() >= 18)
         {
             // North Flight to be Added
+            Flight *chosen = nullptr;
+            for (auto x : flights_arr)
+            {
+                if (x->direction == "North")
+                {
+                    chosen = x;
+                    break;
+                }
+            }
+
+            if (chosen)
+            {
+                arrMutex.lock();
+                deleteFlightFromFlightArr(chosen);
+                arrQ.push_back(chosen);
+                arrMutex.unlock();
+
+                coutMut.lock();
+                cout << ">> Flight " << chosen->id << " is added to Arrival Queue." << endl;
+                coutMut.unlock();
+            }
 
             northTime = chrono::high_resolution_clock::now();
         }
 
-        if (southDuration.count() >= 120)
+        if (southDuration.count() >= 12)
         {
             // South Flight to be Added
+            Flight *chosen = nullptr;
+            for (auto x : flights_arr)
+            {
+                if (x->direction == "South")
+                {
+                    chosen = x;
+                    break;
+                }
+            }
+
+            if (chosen)
+            {
+                arrMutex.lock();
+                deleteFlightFromFlightArr(chosen);
+                arrQ.push_back(chosen);
+                arrMutex.unlock();
+
+                coutMut.lock();
+                cout << ">> Flight " << chosen->id << " is added to Arrival Queue." << endl;
+                coutMut.unlock();
+            }
 
             southTime = chrono::high_resolution_clock::now();
         }
     }
 
+    coutMut.lock();
     cout << ">> Arrival Flight Dispatcher is ending." << endl;
+    coutMut.unlock();
 
     pthread_exit(NULL);
 }
@@ -242,27 +316,71 @@ void *dispatchDepartureFlights(void *arg)
         auto eastDuration = chrono::duration_cast<chrono::seconds>(now - eastTime);
         auto westDuration = chrono::duration_cast<chrono::seconds>(now - westTime);
 
-        if (eastDuration.count() >= 150)
+        if (eastDuration.count() >= 15)
         {
             // East Flight to be Added
+            Flight *chosen = nullptr;
+            for (auto x : flights_arr)
+            {
+                if (x->direction == "East")
+                {
+                    chosen = x;
+                    break;
+                }
+            }
+
+            if (chosen)
+            {
+                depMutex.lock();
+                deleteFlightFromFlightArr(chosen);
+                depQ.push_back(chosen);
+                depMutex.unlock();
+
+                coutMut.lock();
+                cout << ">> Flight " << chosen->id << " is added to Departure Queue." << endl;
+                coutMut.unlock();
+            }
 
             eastTime = chrono::high_resolution_clock::now();
         }
 
-        if (westDuration.count() >= 240)
+        if (westDuration.count() >= 24)
         {
             // West Flight to be Added
+            Flight *chosen = nullptr;
+            for (auto x : flights_arr)
+            {
+                if (x->direction == "West")
+                {
+                    chosen = x;
+                    break;
+                }
+            }
+
+            if (chosen)
+            {
+                depMutex.lock();
+                deleteFlightFromFlightArr(chosen);
+                depQ.push_back(chosen);
+                depMutex.unlock();
+
+                coutMut.lock();
+                cout << ">> Flight " << chosen->id << " is added to Departure Queue." << endl;
+                coutMut.unlock();
+            }
 
             westTime = chrono::high_resolution_clock::now();
         }
     }
 
+    coutMut.lock();
     cout << ">> Departure Flight Dispatcher is ending." << endl;
+    coutMut.unlock();
 
     pthread_exit(NULL);
 }
 
-Flight *highestPriorityFlight(vector<Flight *> q)
+Flight *highestPriorityFlight(vector<Flight *> &q)
 {
     // hP is for the highest priority flight
     Flight *hP = q[0];
@@ -275,7 +393,7 @@ Flight *highestPriorityFlight(vector<Flight *> q)
     return hP;
 }
 
-void removeFlightFromQ(vector<Flight *> q, Flight *r)
+void removeFlightFromQ(vector<Flight *> &q, Flight *r)
 {
     int index = 0;
     for (auto x : q)
@@ -288,10 +406,96 @@ void removeFlightFromQ(vector<Flight *> q, Flight *r)
     q.erase(q.begin() + index);
 }
 
-void *statusTracker(void *arg)
+void *flightTrack(void *arg)
 {
-    // Implement the Status Tracking Logic
+    FlightWrapper *fw = (FlightWrapper *)arg;
 
+    Flight *flt = fw->toLand;
+    Runway *rw = fw->toLandOn;
+
+    // Arrival Handling
+    if (flt->status == flight_status[0])
+    {
+        sleep(5);
+        flt->phase = arrival_phases[0];
+        flt->speed = 400 + (rand() % 210);
+        coutMut.lock();
+        cout << ">> Flight " << flt->id << " -> " << arrival_phases[0] << endl;
+        coutMut.unlock();
+        sleep(5);
+        flt->phase = arrival_phases[1];
+        flt->speed = 240 + (rand() % 60);
+        coutMut.lock();
+        cout << ">> Flight " << flt->id << " -> " << arrival_phases[1] << endl;
+        coutMut.unlock();
+        sleep(5);
+        flt->phase = arrival_phases[2];
+        flt->speed = 30 + (rand() % 220);
+        coutMut.lock();
+        cout << ">> Flight " << flt->id << " -> " << arrival_phases[2] << endl;
+        coutMut.unlock();
+        sleep(5);
+        flt->phase = arrival_phases[3];
+        flt->speed = 15 + (rand() % 20);
+        coutMut.lock();
+        cout << ">> Flight " << flt->id << " -> " << arrival_phases[3] << endl;
+        coutMut.unlock();
+        sleep(5);
+        flt->phase = arrival_phases[4];
+        flt->speed = 0 + (rand() % 10);
+        coutMut.lock();
+        cout << ">> Flight " << flt->id << " -> " << arrival_phases[4] << endl;
+        coutMut.unlock();
+
+        coutMut.lock();
+        cout << ">> Flight " << flt->id << " has Landed." << endl;
+        cout << ">> Runway " << rw->name << " is Freed Up." << endl;
+        coutMut.unlock();
+        rw->freeRunway();
+    }
+    // Departure Handling
+    else if (flt->status == flight_status[1])
+    {
+        sleep(5);
+        flt->phase = departure_phases[0];
+        flt->speed = 0 + (rand() % 15);
+        coutMut.lock();
+        cout << ">> Flight " << flt->id << " -> " << departure_phases[0] << endl;
+        coutMut.unlock();
+        sleep(5);
+        flt->phase = departure_phases[1];
+        flt->speed = 15 + (rand() % 20);
+        coutMut.lock();
+        cout << ">> Flight " << flt->id << " -> " << departure_phases[1] << endl;
+        coutMut.unlock();
+        sleep(5);
+        flt->phase = departure_phases[2];
+        flt->speed = 0 + (rand() % 300);
+        coutMut.lock();
+        cout << ">> Flight " << flt->id << " -> " << departure_phases[2] << endl;
+        coutMut.unlock();
+        sleep(5);
+        flt->phase = departure_phases[3];
+        flt->speed = 250 + (rand() % 220);
+        coutMut.lock();
+        cout << ">> Flight " << flt->id << " -> " << departure_phases[3] << endl;
+        coutMut.unlock();
+        sleep(5);
+        flt->phase = departure_phases[4];
+        flt->speed = 800 + (rand() % 110);
+        coutMut.lock();
+        cout << ">> Flight " << flt->id << " -> " << departure_phases[4] << endl;
+        coutMut.unlock();
+
+        coutMut.lock();
+        cout << ">> Flight " << flt->id << " has Departed." << endl;
+        cout << ">> Runway " << rw->name << " is Freed Up." << endl;
+        coutMut.unlock();
+        rw->freeRunway();
+    }
+
+    delete flt; // Freeing the memory allocated for Flight
+    delete fw;  // Freeing the memory allocated for FlightWrapper
     pthread_exit(NULL);
 }
 
@@ -299,6 +503,9 @@ void *handleArrivals(void *arg)
 {
     while (simRunning)
     {
+        if (arrQ.empty())
+            continue;
+
         // Obtaining the Highest Priority Arrival
         Flight *toLand = nullptr;
         arrMutex.lock();
@@ -306,25 +513,37 @@ void *handleArrivals(void *arg)
         {
             toLand = highestPriorityFlight(arrQ);
             removeFlightFromQ(arrQ, toLand);
+            coutMut.lock();
+            coutMut.unlock();
         }
         arrMutex.unlock();
 
         // Obtaining Available Runway
         Runway *toLandOn = nullptr;
+        runways[0]->rMutex.lock();
+        runways[2]->rMutex.lock();
+
         if (runways[0]->useRunway())
         {
             toLandOn = runways[0];
         }
-        // In Case of Overflow
         else if (runways[2]->useRunway())
         {
             toLandOn = runways[2];
         }
 
+        runways[0]->rMutex.unlock();
+        runways[2]->rMutex.unlock();
+
         if (toLand && toLandOn)
         {
-            cout << ">>Runway " << toLandOn->name << " being used for Flight " << toLand->id << endl;
+            coutMut.lock();
+            cout << ">> Runway " << toLandOn->name << " being used for Flight " << toLand->id << endl;
+            coutMut.unlock();
             // Start the flight Status Tracking Thread
+            pthread_t t;
+            pthread_create(&t, NULL, flightTrack, new FlightWrapper(toLand, toLandOn));
+            pthread_detach(t);
         }
     }
     pthread_exit(NULL);
@@ -334,35 +553,45 @@ void *handleDepartures(void *arg)
 {
     while (simRunning)
     {
-        while (simRunning)
+        if (depQ.empty())
+            continue;
+
+        // Obtaining the Highest Priority Departure
+        Flight *toLand = nullptr;
+        depMutex.lock();
+        if (!depQ.empty())
         {
-            // Obtaining the Highest Priority Arrival
-            Flight *toLand = nullptr;
-            depMutex.lock();
-            if (!depQ.empty())
-            {
-                toLand = highestPriorityFlight(depQ);
-                removeFlightFromQ(depQ, toLand);
-            }
-            depMutex.unlock();
+            toLand = highestPriorityFlight(depQ);
+            removeFlightFromQ(depQ, toLand);
+        }
+        depMutex.unlock();
 
-            // Obtaining Available Runway
-            Runway *toLandOn = nullptr;
-            if (runways[0]->useRunway())
-            {
-                toLandOn = runways[0];
-            }
-            // In Case of Overflow
-            else if (runways[2]->useRunway())
-            {
-                toLandOn = runways[2];
-            }
+        // Obtaining Available Runway
+        Runway *toLandOn = nullptr;
+        runways[1]->rMutex.lock();
+        runways[2]->rMutex.lock();
 
-            if (toLand && toLandOn)
-            {
-                cout << ">>Runway " << toLandOn->name << " being used for Flight " << toLand->id << endl;
-                // Start the flight Status Tracking Thread
-            }
+        if (runways[1]->useRunway())
+        {
+            toLandOn = runways[1];
+        }
+        else if (runways[2]->useRunway())
+        {
+            toLandOn = runways[2];
+        }
+
+        runways[1]->rMutex.unlock();
+        runways[2]->rMutex.unlock();
+
+        if (toLand && toLandOn)
+        {
+            coutMut.lock();
+            cout << ">> Runway " << toLandOn->name << " being used for Flight " << toLand->id << endl;
+            coutMut.unlock();
+            // Start the flight Status Tracking Thread
+            pthread_t t;
+            pthread_create(&t, NULL, flightTrack, new FlightWrapper(toLand, toLandOn));
+            pthread_detach(t);
         }
     }
     pthread_exit(NULL);
@@ -415,7 +644,7 @@ void parse_airlines_CSV(vector<Airline> &airlines, string filename)
     }
 }
 
-void parse_flights_CSV(vector<Flight> &flights, vector<Airline> &airlines, string filename)
+void parse_flights_CSV(vector<Flight *> &flights, vector<Airline> &airlines, string filename)
 {
     ifstream file(filename);
 
@@ -439,7 +668,8 @@ void parse_flights_CSV(vector<Flight> &flights, vector<Airline> &airlines, strin
 
         if (row.size() == 6)
         {
-            flights.emplace_back(row[0], row[1], row[2], stof(row[3]), stoi(row[4]), stoi(row[5]));
+            Flight *newF = new Flight(row[0], row[1], row[2], stof(row[3]), stoi(row[4]), stoi(row[5]));
+            flights.push_back(newF);
         }
     }
 }
@@ -447,16 +677,19 @@ void parse_flights_CSV(vector<Flight> &flights, vector<Airline> &airlines, strin
 void display_airlines(vector<Airline> vec)
 {
     int space[] = {25, 15, 19, 20};
+    coutMut.lock();
     cout << "\n\033[1mName";
     spaces("Name", space[0]);
     cout << "Type";
     spaces("Type", space[1]);
     cout << "No. of Aircrafts";
     spaces("No. of Aircrafts", space[2]);
-    cout << "No. of Voilations\n\033[0m";
+    cout << "No. of Flights\n\033[0m";
+    coutMut.unlock();
 
     for (int i = 0; i < vec.size(); ++i)
     {
+        coutMut.lock();
         cout << vec[i].name;
         spaces(vec[i].name, space[0]);
         cout << vec[i].type;
@@ -464,15 +697,19 @@ void display_airlines(vector<Airline> vec)
         cout << vec[i].num_aircrafts;
         spaces(to_string(vec[i].num_aircrafts), space[2]);
         cout << vec[i].num_flights << endl;
+        coutMut.unlock();
     }
+    coutMut.lock();
     cout << endl;
+    coutMut.unlock();
 }
 
-void display_flights(vector<Flight> vec)
+void display_flights(vector<Flight *> vec)
 {
     int space[] = {12, 12, 12, 16, 12};
     string str;
 
+    coutMut.lock();
     cout << "\n\033[1m";
     str = "Flight ID";
     cout << str;
@@ -490,22 +727,27 @@ void display_flights(vector<Flight> vec)
     cout << str;
     spaces(str, space[4]);
     cout << "AVN Status\n\033[0m";
+    coutMut.unlock();
 
     for (int i = 0; i < vec.size(); ++i)
     {
-        cout << vec[i].id;
-        spaces(to_string(vec[i].id), space[0]);
-        cout << vec[i].direction;
-        spaces(vec[i].direction, space[1]);
-        cout << vec[i].status;
-        spaces(vec[i].status, space[2]);
-        cout << vec[i].phase;
-        spaces(vec[i].phase, space[3]);
-        cout << to_string(vec[i].speed);
-        spaces(to_string(vec[i].speed), space[4], 9);
-        cout << vec[i].AVN_status << endl;
+        coutMut.lock();
+        cout << vec[i]->id;
+        spaces(to_string(vec[i]->id), space[0]);
+        cout << vec[i]->direction;
+        spaces(vec[i]->direction, space[1]);
+        cout << vec[i]->status;
+        spaces(vec[i]->status, space[2]);
+        cout << vec[i]->phase;
+        spaces(vec[i]->phase, space[3]);
+        cout << to_string(vec[i]->speed);
+        spaces(to_string(vec[i]->speed), space[4], 9);
+        cout << vec[i]->AVN_status << endl;
+        coutMut.unlock();
     }
+    coutMut.lock();
     cout << endl;
+    coutMut.unlock();
 }
 
 int main()
@@ -515,16 +757,37 @@ int main()
     parse_airlines_CSV(airlines_vec, filename);
     aircraft_assign_ptr = &(airlines_vec[0].aircrafts[0]);
     filename = "flights_data.csv";
-    vector<Airline> &airlines_arr = airlines_vec; // To be accessed in debugger
-    vector<Flight> flights_arr;
     parse_flights_CSV(flights_arr, airlines_arr, filename);
 
     // Display data
-    display_airlines(airlines_arr);
-    display_flights(flights_arr);
+    display_airlines(airlines_arr);display_flights(flights_arr);
 
     // Starts the Simulation, initializes variables
-    // StartSimulation();
+    StartSimulation();
+
+    while (!flights_arr.empty() || !arrQ.empty() || !depQ.empty())
+    {
+        continue;
+    }
+
+    sleep(26);  // To let any remaining flight finish
+
+    simRunning = false;
+    coutMut.lock();
+    cout << ">> Simulation is ending." << endl;
+    coutMut.unlock();
+    sleep(2);
+
+    for (Runway *x : runways)
+        delete x;
+
+    for (Flight *x : flights_arr)
+        delete x;
+
+    for (Flight *x : arrQ)
+        delete x;
+    for (Flight *x : depQ)
+        delete x;
 
     return 0;
 }

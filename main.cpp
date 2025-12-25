@@ -6,7 +6,7 @@
 
     Section: BS(CS)-F
     Instructor: Ms. Rabail Zahid
-    OS Project - Module 2
+    OS Project - Module 3
 */
 
 #include <iostream>
@@ -19,7 +19,30 @@
 #include <string>
 #include <chrono>
 #include <mutex>
+#include <SFML/Graphics.hpp>
+#include <SFML/Audio.hpp>
+
 using namespace std;
+using namespace sf;
+
+// Initializing Dimensions.
+// resolutionX and resolutionY determine the rendering resolution.
+// Don't edit unless required. Use functions on lines 43, 44, 45 for resizing the game window.
+const int resolutionX = 960;
+const int resolutionY = 960;
+const int boxPixelsX = 32;
+const int boxPixelsY = 32;
+const int gameRows = resolutionX / boxPixelsX;	  // Total rows on grid = 30
+const int gameColumns = resolutionY / boxPixelsY; // Total columns on grid = 30
+
+// 1 gamerow = 32 resolutions
+// nth gamerow = position / boxPixels
+
+// n gamerows = (32 * n) resolutions
+// n resloutions = (n * 1.0 / 32) rows
+
+// Initializing GameGrid.
+int gameGrid[gameRows][gameColumns] = {};
 
 string airline_types[] = {"Commercial", "Military", "Medical", "Cargo"},
        aircraft_types[] = {"Commercial", "Cargo", "Emergency"},
@@ -780,6 +803,21 @@ void initialize_flights(string filename)
 
 int main()
 {
+    srand(time(0));
+    //////////////////// SFML Setting ////////////////////
+    // Declaring RenderWindow.
+    int extrawindow = 270, 
+        extrasetwindow = 177;
+	sf::RenderWindow window(sf::VideoMode(resolutionX + extrawindow, resolutionY), "Flight Control system", sf::Style::Close | sf::Style::Titlebar);
+
+	// Used to resize your window if it's too big or too small. Use according to your needs.
+	window.setSize(sf::Vector2u(640 + extrasetwindow, 640)); // Recommended for 1366x768 (768p) displays.
+	// window.setSize(sf::Vector2u(1280, 1280)); // Recommended for 2560x1440 (1440p) displays.
+
+	// Used to position your window on every launch. Use according to your needs.
+	window.setPosition(sf::Vector2i(70, 0));
+
+
     //////////////////// Input ////////////////////
     string filename = "airlines_data.csv";
     parse_airlines_CSV(airlines_vec, filename);
@@ -793,6 +831,8 @@ int main()
 
     // Starts the Simulation, initializes variables
     StartSimulation();
+
+    
 
     while (!flights_arr.empty() || !arrQ.empty() || !depQ.empty())
     {

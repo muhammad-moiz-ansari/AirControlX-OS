@@ -18,7 +18,11 @@
 #include <sstream>
 #include <string>
 #include <chrono>
+#include <ctime>
 #include <mutex>
+#include <pthread.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <SFML/Graphics.hpp>
 #include <SFML/Audio.hpp>
 
@@ -32,7 +36,7 @@ const int resolutionX = 960;
 const int resolutionY = 960;
 const int boxPixelsX = 32;
 const int boxPixelsY = 32;
-const int gameRows = resolutionX / boxPixelsX;	  // Total rows on grid = 30
+const int gameRows = resolutionX / boxPixelsX;    // Total rows on grid = 30
 const int gameColumns = resolutionY / boxPixelsY; // Total columns on grid = 30
 
 // 1 gamerow = 32 resolutions
@@ -44,16 +48,33 @@ const int gameColumns = resolutionY / boxPixelsY; // Total columns on grid = 30
 // Initializing GameGrid.
 int gameGrid[gameRows][gameColumns] = {};
 
+// The following exist purely for readability.
+const int x = 0;
+const int y = 1;
+const int exists = 2;
+
+int defx = 2010,
+    defy1 = 544, defy2 = 724, defy3 = 904,
+    standx = 1835, liftx = 500, landx = 1200;
+
+Text small_text;
+Text boardtext1 = small_text;
+Text boardtext2 = small_text;
+Text boardtext3 = small_text;
+
 string airline_types[] = {"Commercial", "Military", "Medical", "Cargo"},
        aircraft_types[] = {"Commercial", "Cargo", "Emergency"},
        flight_status[] = {"Arrival", "Departure", "Emergency"},
        arrival_phases[] = {"Holding Phase", "Approach Phase", "Landing Phase", "Taxi Phase", "At Gate"},
-       departure_phases[] = {"At Gate", "Taxi Phase", "Takeoff Roll", "Climb", "Departure"};
+       departure_phases[] = {"At Gate", "Taxi Phase", "Takeoff Roll", "Climb", "Departure"},
+       rname[] = {"RWY-A", "RWY-B", "RWY-C"};
 
 int flight_id_assign = 1; // Variable for assigning flight ids
+int avn_id_assign = 1;    // Variable for assigning avn ids
 int no_of_airlines = 6;
 mutex coutMut;
 
+string getDateTime(int daysAdd = 0);
 void spaces(string str, int s, int limit = 99)
 {
     int size = s - str.size();
@@ -61,6 +82,76 @@ void spaces(string str, int s, int limit = 99)
         size = limit;
     for (int i = 0; i < size; ++i)
         cout << " ";
+}
+
+// Pipe from flight tracking ---> AVN process
+int flight_to_avn[2];
+int atcs_to_avn[2], avn_to_atcs[2],
+    avn_to_portal[2],
+    avn_to_stripepay[2], stripepay_to_avn[2];
+
+/////////////////////////////
+//                         //
+//          PLANE          //
+//                         //
+/////////////////////////////
+
+class Plane
+{
+public:
+    float x, y;
+    float speed, spixel;
+    string color;
+    Plane(float X = defx, float Y = defy1, float sp = 0, float spix = 0)
+    {
+        x = X;
+        y = Y;
+        speed = sp;
+        spixel = spix;
+    }
+};
+
+Plane plane1(defx, defy1), plane2(defx, defy2), plane3(defx, defy3);
+sf::Sprite planeSprite1, planeSprite2, planeSprite3;
+
+void set_speed(string name, float speed, float fact)
+{
+    if (name == rname[0])
+        plane1.spixel = speed * fact;
+    else if (name == rname[1])
+        plane2.spixel = speed * fact;
+    else // if (name == rname[2])
+        plane3.spixel = speed * fact;
+}
+
+void set_position(string name) // Sets the plane position to defualy position based on runway's name
+{
+    if (name == rname[0])
+        plane1.x = defx;
+    else if (name == rname[1])
+        plane2.x = defx;
+    else // if (name == rname[2])
+        plane3.x = defx;
+}
+
+void set_text(string name, string text)
+{
+    if (name == rname[0])
+        boardtext1.setString(text);
+    else if (name == rname[1])
+        boardtext2.setString(text);
+    else // if (name == rname[2])
+        boardtext3.setString(text);
+}
+
+void set_color(string type)
+{
+    if (type == aircraft_types[0])
+        planeSprite1.setColor(sf::Color(220, 255, 220)); // White (Green)
+    else if (type == aircraft_types[1])
+        planeSprite2.setColor(sf::Color(173, 216, 240)); // Blue
+    else                                                 // if (type == aircraft_types[2])
+        planeSprite3.setColor(sf::Color(255, 128, 128)); // Red
 }
 
 //////////////////////////////
@@ -140,11 +231,11 @@ public:
     string direction,
         status,
         phase;
-    float speed;
+    float speed, altitude, posx, posy;
     bool AVN_status;
     Aircraft *aircraft;
 
-    Flight(string d, string st = "", string ph = "", float s = 0, int pr = 0, bool avns = 0)
+    Flight(string d, string st = "", string ph = "", float sp = 0, float alt = 0, float x = defx, float y = defy1, int pr = 0, bool avns = 0)
     {
         id = flight_id_assign++;
         direction = d;
@@ -157,8 +248,11 @@ public:
                 ph = departure_phases[0];
         }
         phase = ph;
-        speed = s;
-        priority = pr;  // Actual priority is assigned later according to aircraft
+        speed = sp;
+        altitude = alt;
+        posx = x;
+        posy = y;
+        priority = pr; // Actual priority is assigned later according to aircraft
         AVN_status = avns;
     }
 };
@@ -175,6 +269,7 @@ public:
     string name;
     bool isOccupied;
     mutex rMutex;
+    int flight_id;
 
     Runway(string n)
     {
@@ -198,6 +293,44 @@ public:
         isOccupied = false;
     }
 };
+
+////////////////////////////////////////////
+//                                        //
+//                  AVN                   //
+//                                        //
+////////////////////////////////////////////
+class AVN
+{
+public:
+    int avn_id, flight_number;
+    string airline_name, aircraft_type;
+    float recorded_speed, allowed_speed;
+    string issue_date_time, due_date;
+    float fine_amount;
+    string payment_status;
+
+    AVN(int fltId = 0, string alineName = "", string acraftType = "", float recSpeed = 0, float allowSpeed = 0, string issue_DT = "", string due = "", float amount = 0, string payStatus = "Unpaid")
+    {
+        avn_id = avn_id_assign++;
+        flight_number = fltId;
+        airline_name = alineName;
+        aircraft_type = acraftType;
+        recorded_speed = recSpeed;
+        allowed_speed = allowSpeed;
+        issue_date_time = issue_DT;
+        due_date = due;
+        fine_amount = amount;
+        payment_status = payStatus;
+    }
+};
+vector<AVN> avnList;
+mutex avnMutex;
+
+///////////////////////////////////////////////
+//                                           //
+//              FLIGHT WRAPPER               //
+//                                           //
+///////////////////////////////////////////////
 
 // In order to send Flight Data as well as Runway Data
 // To the Track Flight Function
@@ -425,6 +558,32 @@ void removeFlightFromQ(vector<Flight *> &q, Flight *r)
     q.erase(q.begin() + index);
 }
 
+/////////////////////////////
+//                         //
+//       FLIGHT DATA       //
+//                         //
+/////////////////////////////
+
+// Class for storing flight data and transfer it for communication
+class FlightData
+{
+public:
+    int flightId;
+    float speed, allowed_speed, altitude;
+    string phase, aircraft_type, airline_name;
+
+    FlightData(int ID = 0, float sp = 0, float allow_s = 0, float alt = 0, string ph = "", string acraft_type = "", string aline_name = "")
+    {
+        flightId = ID;
+        speed = sp;
+        allowed_speed = allow_s;
+        altitude = alt;
+        phase = ph;
+        aircraft_type = acraft_type;
+        airline_name = aline_name;
+    }
+};
+
 void *flightTrack(void *arg)
 {
     FlightWrapper *fw = (FlightWrapper *)arg;
@@ -432,44 +591,154 @@ void *flightTrack(void *arg)
     Flight *flt = fw->toLand;
     Runway *rw = fw->toLandOn;
 
+    string str, airline_name;
+
+    for (int i = 0; i < airlines_arr.size(); ++i)
+    {
+        for (int j = 0; j < airlines_arr[i].num_aircrafts; ++j)
+        {
+            if (flt->aircraft->id == airlines_arr[i].aircrafts[j].id)
+                airline_name = airlines_arr[i].name;
+        }
+    }
+    FlightData data;
+    data.airline_name = airline_name;
+
     // Arrival Handling
     if (flt->status == flight_status[0])
     {
+        // Holding Phase
         sleep(5);
         flt->phase = arrival_phases[0];
         flt->speed = 400 + (rand() % 210);
-        coutMut.lock();
+        flt->altitude = 10000;
+
+        if (flt->speed > 600)
+        {
+            data.aircraft_type = flt->aircraft->type;
+            data.altitude = flt->altitude;
+            data.flightId = flt->id;
+            data.phase = flt->phase;
+            data.speed = flt->speed;
+            data.allowed_speed = 600;
+
+            write(atcs_to_avn[1], &data, sizeof(data));
+        }
+        // coutMut.lock();
         cout << ">> Flight " << flt->id << " -> " << arrival_phases[0] << endl;
-        coutMut.unlock();
+        set_speed(rw->name, flt->speed, 0.00);
+        str = "Flight " + to_string(flt->id) + " -> " + arrival_phases[0];
+        set_text(rw->name, str);
+        // coutMut.unlock();
+
+        // Approach Phase
         sleep(5);
         flt->phase = arrival_phases[1];
         flt->speed = 240 + (rand() % 60);
-        coutMut.lock();
+        flt->altitude = 5000;
+
+        if (flt->speed < 240 || flt->speed > 290)
+        {
+            data.aircraft_type = flt->aircraft->type;
+            data.altitude = flt->altitude;
+            data.flightId = flt->id;
+            data.phase = flt->phase;
+            data.speed = flt->speed;
+            if (flt->speed < 240)
+                data.allowed_speed = 240;
+            else
+                data.allowed_speed = 290;
+
+            write(atcs_to_avn[1], &data, sizeof(data));
+        }
+        // coutMut.lock();
         cout << ">> Flight " << flt->id << " -> " << arrival_phases[1] << endl;
-        coutMut.unlock();
+        set_speed(rw->name, flt->speed, 0.03);
+        str = "Flight " + to_string(flt->id) + " -> " + arrival_phases[1];
+        set_text(rw->name, str);
+        // coutMut.unlock();
+
+        // Landing Phase
         sleep(5);
         flt->phase = arrival_phases[2];
         flt->speed = 30 + (rand() % 220);
-        coutMut.lock();
+        flt->altitude = 1000;
+
+        if (flt->speed < 30 || flt->speed > 240)
+        {
+            data.aircraft_type = flt->aircraft->type;
+            data.altitude = flt->altitude;
+            data.flightId = flt->id;
+            data.phase = flt->phase;
+            data.speed = flt->speed;
+            if (flt->speed < 30)
+                data.allowed_speed = 30;
+            else
+                data.allowed_speed = 240;
+
+            write(atcs_to_avn[1], &data, sizeof(data));
+        }
+        // coutMut.lock();
         cout << ">> Flight " << flt->id << " -> " << arrival_phases[2] << endl;
-        coutMut.unlock();
+        set_speed(rw->name, flt->speed, 0.06);
+        str = "Flight " + to_string(flt->id) + " -> " + arrival_phases[2];
+        set_text(rw->name, str);
+        // coutMut.unlock();
+
+        // Taxi Phase
         sleep(5);
         flt->phase = arrival_phases[3];
         flt->speed = 15 + (rand() % 20);
-        coutMut.lock();
+        flt->altitude = 0;
+
+        if (flt->speed > 30)
+        {
+            data.aircraft_type = flt->aircraft->type;
+            data.altitude = flt->altitude;
+            data.flightId = flt->id;
+            data.phase = flt->phase;
+            data.speed = flt->speed;
+            data.allowed_speed = 30;
+
+            write(atcs_to_avn[1], &data, sizeof(data));
+        }
+        // coutMut.lock();
         cout << ">> Flight " << flt->id << " -> " << arrival_phases[3] << endl;
-        coutMut.unlock();
+        set_speed(rw->name, flt->speed, 0.08);
+        str = "Flight " + to_string(flt->id) + " -> " + arrival_phases[3];
+        set_text(rw->name, str);
+        // coutMut.unlock();
+
+        // At Gate
         sleep(5);
         flt->phase = arrival_phases[4];
         flt->speed = 0 + (rand() % 10);
-        coutMut.lock();
-        cout << ">> Flight " << flt->id << " -> " << arrival_phases[4] << endl;
-        coutMut.unlock();
+        flt->altitude = 0;
 
-        coutMut.lock();
+        if (flt->speed > 10)
+        {
+            data.aircraft_type = flt->aircraft->type;
+            data.altitude = flt->altitude;
+            data.flightId = flt->id;
+            data.phase = flt->phase;
+            data.speed = flt->speed;
+            data.allowed_speed = 5;
+
+            write(atcs_to_avn[1], &data, sizeof(data));
+        }
+        // coutMut.lock();
+        cout << ">> Flight " << flt->id << " -> " << arrival_phases[4] << endl;
+        set_speed(rw->name, flt->speed, 0.08);
+        str = "Flight " + to_string(flt->id) + " -> " + arrival_phases[4];
+        set_text(rw->name, str);
+        // coutMut.unlock();
+
+        // coutMut.lock();
         cout << ">> Flight " << flt->id << " has Landed." << endl;
         cout << ">> Runway " << rw->name << " is Freed Up." << endl;
-        coutMut.unlock();
+        str = "Runway " + rw->name + " is Freed Up";
+        set_text(rw->name, str);
+        // coutMut.unlock();
         rw->freeRunway();
     }
     // Departure Handling
@@ -478,38 +747,60 @@ void *flightTrack(void *arg)
         sleep(5);
         flt->phase = departure_phases[0];
         flt->speed = 0 + (rand() % 15);
-        coutMut.lock();
+        // coutMut.lock();
         cout << ">> Flight " << flt->id << " -> " << departure_phases[0] << endl;
-        coutMut.unlock();
+        set_speed(rw->name, flt->speed, 0.1);
+        str = "Flight " + to_string(flt->id) + " -> " + departure_phases[0];
+        set_text(rw->name, str);
+
+        // coutMut.unlock();
         sleep(5);
         flt->phase = departure_phases[1];
         flt->speed = 15 + (rand() % 20);
-        coutMut.lock();
+        // coutMut.lock();
         cout << ">> Flight " << flt->id << " -> " << departure_phases[1] << endl;
-        coutMut.unlock();
+        set_speed(rw->name, flt->speed, 0.2);
+        str = "Flight " + to_string(flt->id) + " -> " + departure_phases[1];
+        set_text(rw->name, str);
+
+        // coutMut.unlock();
         sleep(5);
         flt->phase = departure_phases[2];
         flt->speed = 0 + (rand() % 300);
-        coutMut.lock();
+        // coutMut.lock();
         cout << ">> Flight " << flt->id << " -> " << departure_phases[2] << endl;
-        coutMut.unlock();
+        set_speed(rw->name, flt->speed, 0.1);
+        str = "Flight " + to_string(flt->id) + " -> " + departure_phases[2];
+        set_text(rw->name, str);
+
+        // coutMut.unlock();
         sleep(5);
         flt->phase = departure_phases[3];
         flt->speed = 250 + (rand() % 220);
-        coutMut.lock();
+        // coutMut.lock();
         cout << ">> Flight " << flt->id << " -> " << departure_phases[3] << endl;
-        coutMut.unlock();
+        set_speed(rw->name, flt->speed, 0.1);
+        str = "Flight " + to_string(flt->id) + " -> " + departure_phases[3];
+        set_text(rw->name, str);
+
+        // coutMut.unlock();
         sleep(5);
         flt->phase = departure_phases[4];
         flt->speed = 800 + (rand() % 110);
-        coutMut.lock();
+        // coutMut.lock();
         cout << ">> Flight " << flt->id << " -> " << departure_phases[4] << endl;
-        coutMut.unlock();
+        str = "Flight " + to_string(flt->id) + " -> " + departure_phases[4];
+        set_text(rw->name, str);
+        set_speed(rw->name, flt->speed, 0.1);
 
-        coutMut.lock();
+        // coutMut.unlock();
+
+        // coutMut.lock();
         cout << ">> Flight " << flt->id << " has Departed." << endl;
         cout << ">> Runway " << rw->name << " is Freed Up." << endl;
-        coutMut.unlock();
+        str = "Runway " + rw->name + " is Freed Up";
+        set_text(rw->name, str);
+        // coutMut.unlock();
         rw->freeRunway();
     }
 
@@ -556,10 +847,15 @@ void *handleArrivals(void *arg)
 
         if (toLand && toLandOn)
         {
-            coutMut.lock();
+            // coutMut.lock();
             cout << ">> Runway " << toLandOn->name << " being used for Flight " << toLand->id << endl;
-            coutMut.unlock();
-            // Start the flight Status Tracking Thread
+            string str = "Runway being used for Flight " + to_string(toLand->id);
+            set_text(toLandOn->name, str);
+            set_color(toLand->aircraft->type);
+            set_position(toLandOn->name);
+            toLandOn->flight_id = toLand->id;
+            // coutMut.unlock();
+            //  Start the flight Status Tracking Thread
             pthread_t t;
             pthread_create(&t, NULL, flightTrack, new FlightWrapper(toLand, toLandOn));
             pthread_detach(t);
@@ -604,16 +900,68 @@ void *handleDepartures(void *arg)
 
         if (toLand && toLandOn)
         {
-            coutMut.lock();
+            // coutMut.lock();
             cout << ">> Runway " << toLandOn->name << " being used for Flight " << toLand->id << endl;
-            coutMut.unlock();
-            // Start the flight Status Tracking Thread
+            string str = "Runway being used for Flight " + to_string(toLand->id);
+            set_text(toLandOn->name, str);
+            set_color(toLand->aircraft->type);
+            set_position(toLandOn->name);
+            toLandOn->flight_id = toLand->id;
+            // coutMut.unlock();
+            //  Start the flight Status Tracking Thread
             pthread_t t;
             pthread_create(&t, NULL, flightTrack, new FlightWrapper(toLand, toLandOn));
             pthread_detach(t);
         }
     }
     pthread_exit(NULL);
+}
+
+void avnGeneratorProcess()
+{
+    vector<AVN> avn_list;
+    while (true)
+    {
+        float fine = 0;
+        string issueDateTime = getDateTime(), dueDate = getDateTime(3);
+        FlightData data;
+        int bytesread = read(atcs_to_avn[0], &data, sizeof(data));
+
+        if (bytesread <= 0)
+        {
+            cout << "No flight data read\n";
+            break;
+        }
+        else
+        {
+            coutMut.lock();
+            cout<<"AVN recieved data!\n";
+            coutMut.unlock();
+        }
+
+        if (data.aircraft_type == "Commercial")
+            fine = 500000;
+        else if (data.aircraft_type == "Cargo")
+            fine = 700000;
+        fine *= 1.15; // 15% service charges
+
+        AVN avn(data.flightId, data.airline_name, data.aircraft_type, data.speed, data.allowed_speed, issueDateTime, dueDate, fine);
+        avn_list.push_back(avn);
+
+        write(avn_to_portal[1], &avn, sizeof(AVN));
+        write(avn_to_stripepay[1], &avn, sizeof(AVN));
+
+        // Reading info from stripe pay
+        AVN new_avn;
+        read(stripepay_to_avn[0], &new_avn, sizeof(AVN));
+
+        for (int i = 0; i < avn_list.size(); ++i)
+        {
+            if (new_avn.avn_id == avn_list[i].avn_id)
+                avn_list[i].payment_status = new_avn.payment_status;
+        }
+    }
+    exit(0);
 }
 
 void StartSimulation()
@@ -801,22 +1149,133 @@ void initialize_flights(string filename)
     }
 }
 
+string getDateTime(int daysAdd)
+{
+    time_t now = time(0);          // current time
+    now += daysAdd * 24 * 60 * 60; // add days in seconds
+
+    tm *futuretime = localtime(&now);
+
+    char buffer[80];
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", futuretime);
+
+    return std::string(buffer);
+}
+
 int main()
 {
     srand(time(0));
     //////////////////// SFML Setting ////////////////////
     // Declaring RenderWindow.
-    int extrawindow = 270, 
-        extrasetwindow = 177;
-	sf::RenderWindow window(sf::VideoMode(resolutionX + extrawindow, resolutionY), "Flight Control system", sf::Style::Close | sf::Style::Titlebar);
+    int extrawindow = 270,
+        extrasetwindow = 180;
+    sf::RenderWindow window(sf::VideoMode(2000, 1105), "AirControlX - Flight Control System", sf::Style::Close | sf::Style::Titlebar);
 
-	// Used to resize your window if it's too big or too small. Use according to your needs.
-	window.setSize(sf::Vector2u(640 + extrasetwindow, 640)); // Recommended for 1366x768 (768p) displays.
-	// window.setSize(sf::Vector2u(1280, 1280)); // Recommended for 2560x1440 (1440p) displays.
+    // Used to resize your window if it's too big or too small. Use according to your needs.
+    window.setSize(sf::Vector2u(1530, 935)); // Recommended for 1366x768 (768p) displays.
+    // window.setSize(sf::Vector2u(1280, 1280)); // Recommended for 2560x1440 (1440p) displays.
 
-	// Used to position your window on every launch. Use according to your needs.
-	window.setPosition(sf::Vector2i(70, 0));
+    // Used to position your window on every launch. Use according to your needs.
+    window.setPosition(sf::Vector2i(300, 0));
 
+    //////////////////// Initializing Textures ////////////////////
+
+    plane1.x = defx;
+    plane1.y = defy1;
+    plane2.x = defx;
+    plane2.y = defy2;
+    plane3.x = defx;
+    plane3.y = defy3;
+
+    // Initializing Text.
+    Font font;
+    font.loadFromFile("Fonts/DOS_VGA.ttf");
+
+    Text big_text;
+    big_text.setFont(font);
+    big_text.setCharacterSize(55);
+    big_text.setFillColor(Color::Black);
+
+    small_text.setFont(font);
+    small_text.setCharacterSize(32);
+    small_text.setFillColor(Color::Black);
+
+    int big_gap = 70, big_posx = 720, big_posy = 175,
+        small_gap = 72, small_posx = 1000, small_posy = 192;
+    // Plane 1
+    Text plane1_text = big_text;
+    plane1_text.setString("Runway A: ");
+    plane1_text.setPosition(big_posx, big_posy + big_gap * 0);
+
+    boardtext1 = small_text;
+    boardtext1.setString("________________________");
+    boardtext1.setPosition(small_posx, small_posy + small_gap * 0);
+
+    // Plane 2
+    Text plane2_text = big_text;
+    plane2_text.setString("Runway B: ");
+    plane2_text.setPosition(big_posx, big_posy + big_gap * 1);
+
+    boardtext2 = small_text;
+    boardtext2.setString("________________________");
+    boardtext2.setPosition(small_posx, small_posy + small_gap * 1);
+
+    // Plane 3
+    Text plane3_text = big_text;
+    plane3_text.setString("Runway C: ");
+    plane3_text.setPosition(big_posx, big_posy + big_gap * 2);
+
+    boardtext3 = small_text;
+    boardtext3.setString("________________________");
+    boardtext3.setPosition(small_posx, small_posy + small_gap * 2);
+
+    // Initializing Background.
+    sf::Texture backgroundTexture1;
+    sf::Sprite backgroundSprite1;
+    backgroundTexture1.loadFromFile("Textures/land.png");
+    backgroundSprite1.setTexture(backgroundTexture1);
+    backgroundSprite1.setColor(sf::Color(255, 255, 255)); // Reduces Opacity to 35%
+
+    // Runway 1
+    sf::Texture runwayTexture1;
+    sf::Texture runwayTexture2;
+    sf::Texture runwayTexture3;
+    sf::Sprite runwaySprites;
+    runwayTexture1.loadFromFile("Textures/road1.png");
+    runwayTexture2.loadFromFile("Textures/road2.png");
+    runwayTexture3.loadFromFile("Textures/road3.png");
+    runwaySprites.setTexture(runwayTexture1);
+
+    // ATC Tower
+    sf::Texture atcTexture;
+    sf::Sprite atcSprite;
+    atcTexture.loadFromFile("Textures/atc.png");
+    atcSprite.setTexture(atcTexture);
+    atcSprite.setPosition(120, 40);
+    atcSprite.setScale(0.27, 0.27);
+
+    // Board Tower
+    sf::Texture boardTexture;
+    sf::Sprite boardSprite;
+    boardTexture.loadFromFile("Textures/board.png");
+    boardSprite.setTexture(boardTexture);
+    boardSprite.setPosition(650, 10);
+    boardSprite.setScale(2.6, 2.4);
+
+    int runwayx = 100, runwayy = 565;
+    // Plane
+    sf::Texture planeTexture;
+    planeTexture.loadFromFile("Textures/plane_y.png");
+    planeSprite1.setTexture(planeTexture);
+    planeSprite1.setScale(0.28, 0.28);
+    planeSprite2 = planeSprite1;
+    planeSprite3 = planeSprite1;
+    planeSprite1.setPosition(plane1.x, plane1.y);
+    planeSprite2.setPosition(plane2.x, plane2.y);
+    planeSprite3.setPosition(plane3.x, plane3.y);
+    set_color(aircraft_types[0]);
+    set_color(aircraft_types[1]);
+    set_color(aircraft_types[2]);
 
     //////////////////// Input ////////////////////
     string filename = "airlines_data.csv";
@@ -829,24 +1288,124 @@ int main()
     display_airlines(airlines_arr);
     display_flights(flights_arr);
 
+    ////////////////// DECLARE PIPES //////////////////
+
+    // int atcs_to_avn[2],
+    //     avn_to_portal[2],
+    //     avn_to_stripepay[2], stripepay_to_avn[2];
+
+    pipe(flight_to_avn);
+    pipe(atcs_to_avn);
+    pipe(avn_to_portal);
+    pipe(avn_to_stripepay);
+    pipe(stripepay_to_avn);
+
+    ////////////////// FORKING PROCESSES //////////////////
+    pid_t avn_pid = fork();
+    if (avn_pid == 0)
+    {
+        close(atcs_to_avn[1]);
+        close(avn_to_atcs[0]);
+        close(avn_to_portal[0]);
+        close(avn_to_stripepay[0]);
+        close(stripepay_to_avn[1]);
+        avnGeneratorProcess(); // atcs_to_avn, avn_to_atcs, avn_to_portal, avn_to_stripepay, stripepay_to_avn);
+    }
+
+    // Closing unused pipe ends in parent
+    //close(flight_to_atcs[0]);
+    close(atcs_to_avn[0]);
+    close(atcs_to_avn[1]);
+    close(avn_to_atcs[0]);
+    close(avn_to_atcs[1]);
+    close(avn_to_portal[0]);
+    close(avn_to_portal[1]);
+    close(avn_to_stripepay[0]);
+    close(avn_to_stripepay[1]);
+    close(stripepay_to_avn[0]);
+    close(stripepay_to_avn[1]);
+
+    bool simulationFinished = false;
+    sf::Clock postSimClock; // Starts the clock
+    bool startedPostSimTimer = false;
+
     // Starts the Simulation, initializes variables
     StartSimulation();
 
-    
-
-    while (!flights_arr.empty() || !arrQ.empty() || !depQ.empty())
+    //////////////////// SFML Render Loop ////////////////////
+    while (window.isOpen())
     {
-        continue;
+        sf::Event e;
+        while (window.pollEvent(e))
+        {
+            if (e.type == sf::Event::Closed || (e.KeyPressed && e.key.code == Keyboard::Escape))
+                window.close();
+        }
+
+        // Check simulation status
+        if (!simulationFinished && flights_arr.empty() && arrQ.empty() && depQ.empty())
+        {
+            simRunning = false;
+            coutMut.lock();
+            cout << ">> Simulation is ending. Displaying for 28 seconds..." << endl;
+            coutMut.unlock();
+            postSimClock.restart(); // Start the 26-second timer
+            startedPostSimTimer = true;
+            simulationFinished = true;
+        }
+
+        // If simulation ended and 26 seconds have passed
+        if (startedPostSimTimer && postSimClock.getElapsedTime().asSeconds() >= 28)
+        {
+            window.close();
+        }
+
+        // --- Render scene ---
+
+        window.draw(backgroundSprite1);
+        window.draw(atcSprite);
+        window.draw(boardSprite);
+        window.draw(plane1_text);
+        window.draw(plane2_text);
+        window.draw(plane3_text);
+        window.draw(boardtext1);
+        window.draw(boardtext2);
+        window.draw(boardtext3);
+
+        runwayx = 95;
+        runwayy = 565;
+        int planescale = 0.5;
+        for (int i = 0; i < runways.size(); ++i)
+        {
+
+            if (i == 0)
+                runwaySprites.setTexture(runwayTexture1);
+            if (i == 1)
+                runwaySprites.setTexture(runwayTexture2);
+            else if (i == 2)
+                runwaySprites.setTexture(runwayTexture3);
+            runwaySprites.setScale(1.37, 1);
+            runwaySprites.setPosition(runwayx, runwayy + i * 180);
+            window.draw(runwaySprites);
+        }
+
+        plane1.x -= plane1.spixel;
+        plane2.x -= plane2.spixel;
+        plane3.x -= plane3.spixel;
+
+        planeSprite1.setPosition(plane1.x, plane1.y);
+        planeSprite2.setPosition(plane2.x, plane2.y);
+        planeSprite3.setPosition(plane3.x, plane3.y);
+
+        window.draw(planeSprite1);
+        window.draw(planeSprite2);
+        window.draw(planeSprite3);
+
+        window.display();
+        window.clear();
     }
 
-    sleep(26); // To let any remaining flight finish
-
-    simRunning = false;
-    coutMut.lock();
-    cout << ">> Simulation is ending." << endl;
-    coutMut.unlock();
-    sleep(2);
-
+    //////////////////// Cleanup ////////////////////
     for (Runway *x : runways)
         delete x;
 
@@ -855,8 +1414,15 @@ int main()
 
     for (Flight *x : arrQ)
         delete x;
+
     for (Flight *x : depQ)
         delete x;
+
+    // Waiting for children
+    wait(NULL);
+    //wait(NULL);
+    //wait(NULL);
+    
 
     return 0;
 }

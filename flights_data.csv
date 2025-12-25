@@ -1,0 +1,53 @@
+direction,status,phase,speed,priority,AVN_status
+North,Arrival,Holding,520,3,0
+South,Arrival,Approach,260,1,0
+East,Departure,Gate,0,2,0
+West,Departure,Taxi,20,1,0
+North,Arrival,Landing,240,2,0
+South,Arrival,Holding,410,3,0
+East,Departure,Climb,300,3,0
+West,Departure,Takeoff Roll,280,2,0
+North,Arrival,Taxi,30,2,0
+South,Arrival,At Gate,0,1,0
+East,Departure,Gate,0,1,0
+West,Departure,Climb,270,2,0
+North,Arrival,Holding,480,3,0
+South,Arrival,Approach,250,2,0
+East,Departure,Taxi,25,1,0
+West,Departure,Takeoff Roll,295,3,0
+North,Arrival,Landing,235,2,0
+South,Arrival,Holding,400,1,0
+East,Departure,Climb,310,3,0
+West,Departure,Taxi,22,2,0
+North,Arrival,Taxi,29,1,0
+South,Arrival,Approach,270,2,0
+East,Departure,Gate,0,1,0
+West,Departure,Takeoff Roll,285,2,0
+North,Arrival,Holding,550,3,0
+South,Arrival,Landing,240,2,0
+East,Departure,Climb,450,1,0
+West,Departure,Taxi,30,2,0
+North,Arrival,Taxi,28,3,0
+South,Arrival,At Gate,0,1,0
+East,Departure,Takeoff Roll,290,2,0
+West,Departure,Gate,0,1,0
+North,Arrival,Approach,260,3,0
+South,Arrival,Holding,430,2,0
+East,Departure,Taxi,27,1,0
+West,Departure,Climb,460,3,0
+North,Arrival,Landing,245,1,0
+South,Arrival,Taxi,26,1,0
+East,Departure,Takeoff Roll,288,2,0
+West,Departure,Gate,0,2,0
+North,Arrival,Holding,510,2,0
+South,Arrival,Approach,255,2,0
+East,Departure,Taxi,24,3,0
+West,Departure,Climb,400,2,0
+North,Arrival,Taxi,30,1,0
+South,Arrival,Landing,230,1,0
+East,Departure,Takeoff Roll,286,2,0
+West,Departure,Gate,0,1,0
+North,Arrival,At Gate,0,1,0
+South,Arrival,Holding,420,3,0
+East,Departure,Climb,460,2,0
+West,Departure,Taxi,23,1,0
